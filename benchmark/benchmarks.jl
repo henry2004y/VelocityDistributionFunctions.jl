@@ -1,21 +1,39 @@
 using BenchmarkTools
 using VelocityDistributionFunctions
+using VelocityDistributionFunctions: directional_energy_spectra, PAspectra, sort_flux_by_pitch_angle!
 using StaticArrays: SA
+using JLD2
 
 const SUITE = BenchmarkGroup()
 
 const v3 = SA[0.5, 0.3, 0.8]
 
-for (name, d) in [
-    ("Maxwellian",  Maxwellian(1.0)),
-    ("BiMaxwellian", BiMaxwellian(1.0, 2.0)),
-    ("Kappa",       Kappa(1.0, 4.0)),
-    ("BiKappa",     BiKappa(1.0, 2.0, 4.0)),
+dists = [
+    Maxwellian(1.0), BiMaxwellian(1.0, 2.0),
+    Kappa(1.0, 4.0), BiKappa(1.0, 2.0, 4.0),
 ]
+
+for d in dists
+    name = String(nameof(typeof(d)))
     g = SUITE[name] = BenchmarkGroup()
-    g["pdf"]      = @benchmarkable pdf($d, $v3)
-    g["rand"]     = @benchmarkable rand($d)
-    g["rand_1k"]  = @benchmarkable rand($d, 1000)
+    g["pdf"] = @benchmarkable pdf($d, $v3)
+    g["rand"] = @benchmarkable rand($d)
+    g["rand_1k"] = @benchmarkable rand($d, 1000)
+end
+
+include(joinpath(@__DIR__, "../test/fixtures/elfin_helpers.jl"))
+
+# Spectra benchmarks on the real ELFIN EPD fixture, tiled along time to a full
+# day's worth of half-spin records (~1731).
+let
+    (; S, pa, LC) = load_elfin_fixture(; n_t = 1731)
+    params = elfin_des_params(size(pa, 1))
+
+    g = SUITE["spectra"] = BenchmarkGroup()
+    g["directional_energy_spectra"] = @benchmarkable directional_energy_spectra($S, $pa, $LC; $params...)
+
+    S_sorted = (s = copy(S); sort_flux_by_pitch_angle!(s, pa); s)
+    g["PAspectra"] = @benchmarkable PAspectra($S_sorted, $ELFIN_EPD_dE, $(ELFIN_PA_CHANNELS)...)
 end
 
 # tmoments benchmark with synthetic MMS-like data
@@ -28,6 +46,6 @@ let nt = 100, nphi = 32, ntheta = 16, nenergy = 32
     magf = randn(nt, 3)
 
     g = SUITE["tmoments"] = BenchmarkGroup()
-    g["no_magf"]   = @benchmarkable tmoments($data, $theta, $phi, $energy, $scpot; edim = 4, tdim = 1, units = :df_cm)
+    g["no_magf"] = @benchmarkable tmoments($data, $theta, $phi, $energy, $scpot; edim = 4, tdim = 1, units = :df_cm)
     g["with_magf"] = @benchmarkable tmoments($data, $theta, $phi, $energy, $scpot, $magf; edim = 4, tdim = 1, units = :df_cm)
 end
